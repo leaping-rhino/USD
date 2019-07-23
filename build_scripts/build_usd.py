@@ -130,11 +130,11 @@ def GetPythonInfo():
     This function is primarily used to determine which version of
     Python USD should link against when multiple versions are installed.
     """
-    # We just skip all this on Windows. Users on Windows are unlikely to have
-    # multiple copies of the same version of Python, so the problem this
-    # function is intended to solve doesn't arise on that platform.
-    if Windows():
-        return None
+    # # We just skip all this on Windows. Users on Windows are unlikely to have
+    # # multiple copies of the same version of Python, so the problem this
+    # # function is intended to solve doesn't arise on that platform.
+    # if Windows():
+    #     return None
 
     # We also skip all this on Linux. The below code gets the wrong answer on
     # certain distributions like Ubuntu, which organizes libraries based on
@@ -145,18 +145,41 @@ def GetPythonInfo():
     if Linux():
         return None
 
+    isMayaPython = False
+    pythonExe = sys.executable
+    if os.path.splitext(os.path.basename(pythonExe))[0].lower() == 'mayapy':
+        isMayaPython = True
+
     try:
         import distutils.sysconfig
 
         pythonExecPath = None
         pythonLibPath = None
+        pythonIncludeDir = None
 
-        pythonPrefix = distutils.sysconfig.PREFIX
-        if pythonPrefix:
-            pythonExecPath = os.path.join(pythonPrefix, 'bin', 'python')
-            pythonLibPath = os.path.join(pythonPrefix, 'lib', 'libpython2.7.dylib')
+        if isMayaPython:
+            mayaBasePath = os.path.dirname(os.path.dirname(pythonExe))
+            pythonExecPath = pythonExe
+            pythonLibPath = os.path.join(mayaBasePath, 'lib', 'python{0}{1}.lib'.format(sys.version_info.major, sys.version_info.minor))
+            pythonIncludeDir = os.path.join(
+                mayaBasePath, 'include', 'python{0}.{1}'.format(sys.version_info.major, sys.version_info.minor))
+        elif Windows():
+            pythonConfigVars = distutils.sysconfig.get_config_vars()
+            pythonExecPath = sys.executable  # pythonConfigVars.get('BINDIR')
+            pythonLibPath = pythonConfigVars.get('BINDIR')
+            # if pythonExecPath:
+            #   pythonExecPath = os.path.join(pythonExecPath, 'python.exe')
+            if pythonLibPath:
+                pythonLibPath = os.path.join(pythonLibPath, 'python{0}.dll'.format(pythonConfigVars.get('VERSION')))
 
-        pythonIncludeDir = distutils.sysconfig.get_python_inc()
+            pythonIncludeDir = distutils.sysconfig.get_python_inc()
+        else:
+            pythonPrefix = distutils.sysconfig.PREFIX
+            if pythonPrefix:
+                pythonExecPath = os.path.join(pythonPrefix, 'bin', 'python')
+                pythonLibPath = os.path.join(pythonPrefix, 'lib', 'libpython2.7.dylib')
+
+            pythonIncludeDir = distutils.sysconfig.get_python_inc()
     except:
         return None
 
@@ -577,6 +600,51 @@ def InstallBoost(context, force, buildArgs):
 
         if context.buildPython:
             b2_settings.append("--with-python")
+            pythonInfo = GetPythonInfo()
+            if pythonInfo:
+                # Ensure that 'using python : major.minor : execPath ; line is present in project-config.jam
+                lines = []
+                with open('project-config.jam', 'rt') as f:
+                    for line in f:
+                        if 'using python' not in line:
+                            lines.append(line)
+                if Windows():
+                    # Escape the windows seperator and spaces for the .jam file (quotes don't appear to work)
+                    execPath = pythonInfo[0] \
+                        .replace(
+                            os.path.sep, '{0}{1}'.format(os.path.sep, os.path.sep)
+                        ) \
+                        .replace(
+                            ' ', '\\ ',
+                        )
+                    includePath = pythonInfo[2] \
+                        .replace(
+                            os.path.sep, '{0}{1}'.format(os.path.sep, os.path.sep)
+                        ) \
+                        .replace(
+                            ' ', '\\ ',
+                        )
+                    libPath = os.path.dirname(pythonInfo[1]) \
+                        .replace(
+                            os.path.sep, '{0}{1}'.format(os.path.sep, os.path.sep)
+                        ) \
+                        .replace(
+                            ' ', '\\ ',
+                        )
+                else:
+                    execPath = pythonInfo[0]
+                    includePath = pythonInfo[2]
+                    libPath = os.path.dirname(pythonInfo[1])
+                lines.append('using python : {major}.{minor} : {execPath} : {includePath} : {libPath} ;'.format(
+                    major=sys.version_info.major,
+                    minor=sys.version_info.minor,
+                    execPath=execPath,
+                    includePath=includePath,
+                    libPath=libPath,
+                ))
+                with open('project-config.jam', 'wt') as f:
+                    f.writelines(lines)
+
 
         if context.buildKatana or context.buildOIIO:
             b2_settings.append("--with-date_time")
